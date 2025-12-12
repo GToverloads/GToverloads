@@ -1,11 +1,10 @@
-// Wait for the entire page to load before running any scripts
+ // Wait for the entire page to load before running any scripts
 window.addEventListener('load', () => {
 
-    // ======================================================
-    // == Initialize Firebase Services                   ==
-    // ======================================================
+    // Initialize Firebase Services and other constants
     const auth = firebase.auth();
     const db = firebase.firestore();
+    const BACKEND_URL = "https://gtoverloads-backend.onrender.com";
 
     // ======================================================
     // == 1. INTRO & "SHOW ONCE" LOGIC                     ==
@@ -116,13 +115,13 @@ window.addEventListener('load', () => {
 
     const fetchHistory = (user) => {
         if (!user || !historyList || !db) return;
-        historySection.style.display = 'block';
-        historyList.innerHTML = '<p class="history-loading">Loading history...</p>';
+        if(historySection) historySection.style.display = 'block';
+        if(historyList) historyList.innerHTML = '<p class="history-loading">Loading history...</p>';
         db.collection('users').doc(user.uid).collection('history')
           .orderBy('timestamp', 'desc').limit(5).get()
           .then(querySnapshot => {
               if (querySnapshot.empty) {
-                  historyList.innerHTML = '<p>No recent activity found.</p>';
+                  if(historyList) historyList.innerHTML = '<p>No recent activity found.</p>';
                   return;
               }
               let historyHTML = '';
@@ -131,10 +130,10 @@ window.addEventListener('load', () => {
                   const date = item.timestamp ? item.timestamp.toDate().toLocaleString() : 'Just now';
                   historyHTML += `<div class="history-item"><p class="history-tool">${item.tool}</p><p class="history-date">${date}</p></div>`;
               });
-              historyList.innerHTML = historyHTML;
+              if(historyList) historyList.innerHTML = historyHTML;
           }).catch(error => {
               console.error("Error fetching history:", error);
-              historyList.innerHTML = '<p>Could not load history.</p>';
+              if(historyList) historyList.innerHTML = '<p>Could not load history.</p>';
           });
     };
 
@@ -163,12 +162,10 @@ window.addEventListener('load', () => {
             if (loggedInView) loggedInView.style.display = 'none';
             if (loggedOutView) loggedOutView.style.display = 'block';
             if (historySection) historySection.style.display = 'none';
-
             const googleBtn = document.getElementById('google-signin-btn');
             const emailForm = document.getElementById('email-password-form');
             const forgotPassLink = document.getElementById('forgot-password-link');
             const signupLink = document.getElementById('signup-link');
-
             if(googleBtn) googleBtn.addEventListener('click', () => {
                 const provider = new firebase.auth.GoogleAuthProvider();
                 auth.signInWithPopup(provider).catch(error => console.error("Sign-In Error:", error));
@@ -208,26 +205,14 @@ window.addEventListener('load', () => {
     auth.onAuthStateChanged(updateAuthStateUI);
 
     // ======================================================
-    // == SIMULATE TOOL USAGE TO SAVE HISTORY              ==
-    // ======================================================
-    const toolLinks = document.querySelectorAll('.orbit-icon');
-    toolLinks.forEach(link => {
-        link.addEventListener('click', (e) => {
-            const toolName = link.getAttribute('title');
-            if (toolName && auth.currentUser) {
-                saveToHistory(toolName);
-            }
-        });
-    });
-
-    // ======================================================
-    // == 4. ORBITING MENU & OTHER LOGIC                   ==
+    // == 4. ORBITING MENU & OTHER LOGIC (RESTORED)        ==
     // ======================================================
     const orbitContainer = document.querySelector('.orbit-container');
     if (orbitContainer) {
-        const orbitWrapper = document.querySelector('.orbit-wrapper');
-        const orbitIcons = document.querySelectorAll('.orbit-icon');
+        const orbitWrapper = orbitContainer.querySelector('.orbit-wrapper');
+        const orbitIcons = orbitContainer.querySelectorAll('.orbit-icon');
         const numIcons = orbitIcons.length;
+
         const placeIconsInOrbit = () => {
             const radius = orbitContainer.offsetWidth / 2;
             const wrapperRotation = getRotationDegrees(orbitWrapper);
@@ -256,6 +241,16 @@ window.addEventListener('load', () => {
         placeIconsInOrbit();
         setInterval(placeIconsInOrbit, 50);
         window.addEventListener('resize', placeIconsInOrbit);
+        
+        // Save to history when an orbit icon is clicked
+        orbitIcons.forEach(link => {
+            link.addEventListener('click', () => {
+                const toolName = link.getAttribute('title');
+                if (toolName && auth.currentUser) {
+                    saveToHistory(toolName);
+                }
+            });
+        });
     }
 
     const revealElements = document.querySelectorAll('.reveal-on-scroll');
@@ -270,4 +265,157 @@ window.addEventListener('load', () => {
         }, { threshold: 0.1 });
         revealElements.forEach(element => { observer.observe(element); });
     }
+
+    // ======================================================
+    // == 5. IMAGE CONVERTER TOOL LOGIC                    ==
+    // ======================================================
+    const imageInputElement = document.getElementById('image-input');
+    const uploadArea = document.querySelector('.upload-area');
+    const convertBtn = document.getElementById('convert-btn');
+    
+    if (uploadArea && imageInputElement && convertBtn) {
+        uploadArea.addEventListener('click', () => imageInputElement.click());
+        imageInputElement.addEventListener('change', () => {
+            const file = imageInputElement.files[0];
+            if (file) {
+                document.getElementById('preview-area').style.display = 'block';
+                document.getElementById('image-preview').src = URL.createObjectURL(file);
+                document.getElementById('image-name').textContent = file.name;
+                uploadArea.style.display = 'none';
+                convertBtn.disabled = false;
+            }
+        });
+        convertBtn.addEventListener('click', () => {
+            const file = imageInputElement.files[0];
+            const format = document.getElementById('format-select').value;
+            const loadingSpinner = document.getElementById('loading-spinner');
+            const resultArea = document.getElementById('result-area');
+            const downloadLink = document.getElementById('download-link');
+            if (!file) { alert("Please select a file first."); return; }
+            loadingSpinner.style.display = 'block';
+            convertBtn.disabled = true;
+            resultArea.style.display = 'none';
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('format', format);
+            fetch(`${BACKEND_URL}/convert-image`, { method: 'POST', body: formData })
+            .then(response => {
+                if (!response.ok) { throw new Error(`Server error: ${response.statusText}`); }
+                const contentDisposition = response.headers.get('content-disposition');
+                let filename = "downloaded_file";
+                if (contentDisposition) {
+                    const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+                    if (filenameMatch && filenameMatch.length > 1) {
+                        filename = filenameMatch[1];
+                    }
+                }
+                return response.blob().then(blob => ({ blob, filename }));
+            })
+            .then(({ blob, filename }) => {
+                const url = window.URL.createObjectURL(blob);
+                downloadLink.href = url;
+                downloadLink.download = filename;
+                loadingSpinner.style.display = 'none';
+                resultArea.style.display = 'block';
+                if (auth.currentUser) {
+                    saveToHistory(`Image converted to ${format.toUpperCase()}`);
+                }
+            })
+            .catch(error => {
+                console.error("Error:", error);
+                alert("An error occurred during conversion. Please make sure the backend server is running.");
+                loadingSpinner.style.display = 'none';
+                convertBtn.disabled = false;
+            });
+        });
+    }
 });
+// ======================================================
+    // == NEW: IMAGE COMPRESSOR TOOL LOGIC                 ==
+    // ======================================================
+    const compressBtn = document.getElementById('compress-btn');
+    const qualitySlider = document.getElementById('quality-slider');
+    const qualityValue = document.getElementById('quality-value');
+
+    if (compressBtn && qualitySlider && qualityValue) {
+        // Update the displayed quality value when the slider changes
+        qualitySlider.addEventListener('input', () => {
+            qualityValue.textContent = qualitySlider.value;
+        });
+
+        // The image input logic is the same as the converter
+        const imageInputCompress = document.getElementById('image-input');
+        const uploadAreaCompress = document.querySelector('.upload-area');
+        
+        if (uploadAreaCompress && imageInputCompress) {
+            uploadAreaCompress.addEventListener('click', () => imageInputCompress.click());
+            imageInputCompress.addEventListener('change', () => {
+                const file = imageInputCompress.files[0];
+                if (file) {
+                    document.getElementById('preview-area').style.display = 'block';
+                    document.getElementById('image-preview').src = URL.createObjectURL(file);
+                    document.getElementById('image-name').textContent = `Original Size: ${(file.size / 1024).toFixed(2)} KB`;
+                    uploadAreaCompress.style.display = 'none';
+                    compressBtn.disabled = false;
+                }
+            });
+        }
+
+        compressBtn.addEventListener('click', () => {
+            const file = imageInputCompress.files[0];
+            const quality = qualitySlider.value;
+            const loadingSpinner = document.getElementById('loading-spinner');
+            const resultArea = document.getElementById('result-area');
+            const downloadLink = document.getElementById('download-link');
+            const resultStats = document.getElementById('result-stats');
+
+            if (!file) { return; }
+
+            loadingSpinner.style.display = 'block';
+            compressBtn.disabled = true;
+            resultArea.style.display = 'none';
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('quality', quality);
+
+            fetch(`${BACKEND_URL}/compress-image`, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) { throw new Error('Compression failed on the server.'); }
+                const originalSize = file.size;
+                const contentDisposition = response.headers.get('content-disposition');
+                let filename = "downloaded_file";
+                if (contentDisposition) {
+                    const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+                    if (filenameMatch && filenameMatch.length > 1) { filename = filenameMatch[1]; }
+                }
+                return response.blob().then(blob => ({ blob, filename, originalSize }));
+            })
+            .then(({ blob, filename, originalSize }) => {
+                const url = window.URL.createObjectURL(blob);
+                const newSize = blob.size;
+                const reduction = 100 - (newSize / originalSize) * 100;
+
+                downloadLink.href = url;
+                downloadLink.download = filename;
+                resultStats.textContent = `New Size: ${(newSize / 1024).toFixed(2)} KB | Reduction: ${reduction.toFixed(1)}%`;
+                
+                loadingSpinner.style.display = 'none';
+                resultArea.style.display = 'block';
+                compressBtn.disabled = false;
+
+                if (auth.currentUser) {
+                    saveToHistory(`Image Compressed`);
+                }
+            })
+            .catch(error => {
+                console.error("Error:", error);
+                alert("An error occurred during compression.");
+                loadingSpinner.style.display = 'none';
+                compressBtn.disabled = false;
+            });
+        });
+    }
